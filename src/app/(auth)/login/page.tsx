@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Eye, EyeOff, KeyRound, Mail, Sparkles } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, Mail, MailCheck, Sparkles } from 'lucide-react';
 import { AuthShell } from '@/components/auth/AuthShell';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { Button } from '@/components/ui/Button';
@@ -18,6 +18,7 @@ function LoginForm() {
   const { error: toastError } = useToast();
 
   const next = params.get('next') || '/search';
+  const confirmed = params.get('confirmed') === '1';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -59,6 +60,12 @@ function LoginForm() {
       title="Sign in to SwapStay"
       description="Pick up your trips, listings and credit wallet where you left them."
     >
+      {confirmed && (
+        <div className="mb-4 flex items-start gap-3 rounded-2xl border border-sage-200 bg-sage-50 p-4 text-[12px] leading-5 text-pine">
+          <MailCheck className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>Your email is confirmed. Sign in to continue to SwapStay.</p>
+        </div>
+      )}
       <form onSubmit={submit} className="space-y-4" noValidate>
         <Input
           label="Email address"

@@ -143,7 +143,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { display_name: displayName } },
+      options: {
+        data: { display_name: displayName },
+        emailRedirectTo:
+          typeof window !== 'undefined'
+            ? `${window.location.origin}/login?confirmed=1`
+            : undefined,
+      },
     });
     if (error) throw new Error(error.message);
     return { needsConfirmation: !data.session };
