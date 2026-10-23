@@ -74,4 +74,5 @@ The client displays server/API errors and treats server responses as authoritati
 - The frontend relies on the Next rewrite because the backend does not provide browser CORS handling.
 - The production admin console reads `/api/admin/verification` and `/api/admin/property-verification`; the demo includes local seeded equivalents.
 - Photo, video, and verification uploads require the corresponding Supabase Storage buckets and are handled gracefully when storage is not configured.
-- Messaging is backed by the companion `hackerwrath3.0` API using `/api/conversations` and `/api/conversations/:id/messages`; apply its `00002_messaging.sql` migration before enabling production chat.
+- Messaging is backed by the companion `hackerwrath3.0` API using `/api/conversations` and `/api/conversations/:id/messages`.
+- Apply `supabase/migrations/00002_messaging.sql` through `00005_property_verification_media.sql` in order. They are idempotent, so re-running a migration is safe.
