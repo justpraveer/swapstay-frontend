@@ -76,7 +76,7 @@ function AdminContent() {
   const [status, setStatus] = useState('open');
   const [page, setPage] = useState(1);
   const reports = useApiQuery(() => getAdminReports(status, page, PAGE_SIZE), [status, page]);
-  const queue = useApiQuery(() => getAdminVerificationQueue(), [], { enabled: isDemo });
+  const queue = useApiQuery(() => getAdminVerificationQueue(), []);
 
   const items = reports.data?.items ?? [];
   const total = reports.data?.meta?.total ?? items.length;
@@ -440,10 +440,10 @@ function AdminContent() {
               </div>
             </div>
 
-            {isDemo && (
+            {(isDemo || pendingQueue.length > 0) && (
               <div className="mt-4">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-500">
-                  Pending in demo ({pendingQueue.length})
+                  Pending review ({pendingQueue.length})
                 </p>
                 {pendingQueue.length === 0 ? (
                   <p className="mt-2 rounded-xl bg-sage-50 px-3 py-2.5 text-[11px] text-pine">
@@ -493,7 +493,7 @@ function AdminContent() {
                 hint={
                   isDemo
                     ? 'Use a pending member above, or paste any seeded UUID.'
-                    : 'The production API has no queue listing; paste the user ID from the verification request.'
+                    : 'Pick a member from the pending queue, or paste their user ID.'
                 }
                 spellCheck={false}
                 autoComplete="off"
