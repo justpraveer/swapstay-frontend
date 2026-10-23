@@ -20,7 +20,7 @@ NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 ```
 
-Optional Supabase Storage buckets are configured with `NEXT_PUBLIC_SUPABASE_PHOTO_BUCKET` and `NEXT_PUBLIC_SUPABASE_VERIFICATION_BUCKET`.
+Optional Supabase Storage buckets are configured with `NEXT_PUBLIC_SUPABASE_PHOTO_BUCKET`, `NEXT_PUBLIC_SUPABASE_VERIFICATION_BUCKET`, `NEXT_PUBLIC_SUPABASE_PROPERTY_VERIFICATION_BUCKET`, and `NEXT_PUBLIC_SUPABASE_VIDEO_BUCKET`.
 
 ### Authentication and verification
 
@@ -35,6 +35,24 @@ Verification is a manual server-controlled process:
 5. Only verified members can list homes, request credit stays, or propose/accept direct swaps.
 
 Submitting documents never grants the badge automatically. Apply the backend verification migration and configure the private `verification` Supabase Storage bucket before accepting real documents.
+
+### Property verification and media
+
+Member verification and property verification are separate:
+
+1. The host opens **My homes → Verification** for a listing.
+2. They generate a one-time physical code, write it on a card, place it inside the home, and photograph it.
+3. They upload an ownership document or a lease/rental agreement, plus the code photo.
+4. The submission enters the admin **Home verification** queue with short-lived signed links to the private evidence.
+5. An admin marks it `verified` or `rejected` with notes. Verified homes become `active` and show a **Verified home** badge in search and on the property page.
+
+Listing media:
+
+- Photos upload to the public `property-photos` bucket and are attached to the listing.
+- One short walkthrough video (MP4/MOV/WebM, ≤100 MB, ≤60 seconds) uploads to the private `property-videos` bucket and streams through signed URLs.
+- Ownership evidence and code photos live in the private `property-verification` bucket. They are never public.
+
+Apply `00005_property_verification_media.sql` to create the tables, property verification columns, and storage buckets/policies.
 
 ## Demo mode
 
@@ -54,6 +72,6 @@ The client displays server/API errors and treats server responses as authoritati
 ## Backend notes
 
 - The frontend relies on the Next rewrite because the backend does not provide browser CORS handling.
-- Production verification queue data is unavailable unless the backend exposes the admin verification endpoint; the demo includes a local seeded queue.
-- Photo and verification uploads require the corresponding Supabase Storage buckets and are handled gracefully when storage is not configured.
+- The production admin console reads `/api/admin/verification` and `/api/admin/property-verification`; the demo includes local seeded equivalents.
+- Photo, video, and verification uploads require the corresponding Supabase Storage buckets and are handled gracefully when storage is not configured.
 - Messaging is backed by the companion `hackerwrath3.0` API using `/api/conversations` and `/api/conversations/:id/messages`; apply its `00002_messaging.sql` migration before enabling production chat.

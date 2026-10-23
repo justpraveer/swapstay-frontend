@@ -40,3 +40,6 @@ yarn-error.log*
 
 # companion backend repository (maintained and pushed separately)
 /hackerwrath3.0/
+
+.vercel
+.env*

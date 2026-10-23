@@ -26,7 +26,12 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { PropertyImage, ThumbStrip } from '@/components/property/PropertyImage';
 import { ScorePanel } from '@/components/property/ScorePanel';
 import { ScoreRing, Avatar, EmptyState, ErrorState, InfoRow, LoadingBlock } from '@/components/ui/Primitives';
-import { Badge, ListingStatusBadge, VerificationBadge } from '@/components/ui/Badge';
+import {
+  Badge,
+  ListingStatusBadge,
+  PropertyVerificationBadge,
+  VerificationBadge,
+} from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { BookingRequestModal } from '@/components/booking/BookingRequestModal';
 import { ReportModal } from '@/components/modals/ReportModal';
@@ -210,6 +215,11 @@ export default function PropertyDetailPage() {
                     Verified host
                   </Badge>
                 )}
+                {property.verification_status === 'verified' && (
+                  <Badge tone="moss" dot>
+                    Verified home
+                  </Badge>
+                )}
               </div>
             </div>
           </div>
@@ -228,6 +238,7 @@ export default function PropertyDetailPage() {
           <div className="mt-7">
             <div className="flex flex-wrap items-center gap-2">
               <ListingStatusBadge status={property.listing_status} />
+              <PropertyVerificationBadge status={property.verification_status ?? 'unverified'} />
               <span className="inline-flex items-center gap-1 text-[11.5px] text-ink-500">
                 <MapPin className="h-3.5 w-3.5" />
                 {property.neighbourhood}, {property.city}
@@ -273,6 +284,23 @@ export default function PropertyDetailPage() {
               ))}
             </div>
           </section>
+
+          {property.videos && property.videos.length > 0 && (
+            <section className="mt-8">
+              <h2 className="text-[24px] leading-tight">Walkthrough</h2>
+              <p className="mt-1.5 text-[12px] leading-6 text-ink-500">
+                A short clip recorded by the host inside the actual home.
+              </p>
+              <div className="mt-3 overflow-hidden rounded-3xl border border-sand-200 bg-black">
+                <video
+                  src={property.videos[0].url ?? undefined}
+                  controls
+                  playsInline
+                  className="aspect-video w-full bg-black"
+                />
+              </div>
+            </section>
+          )}
 
           {/* host */}
           <section className="mt-8 rounded-3xl border border-sand-200/90 bg-white/80 p-5">

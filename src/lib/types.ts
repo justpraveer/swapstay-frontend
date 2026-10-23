@@ -114,9 +114,69 @@ export interface PropertyRow {
   amenities: string[];
   house_rules: string[];
   listing_status: ListingStatus;
+  verification_status?: VerificationStatus;
+  verification_notes?: string | null;
+  verification_code?: string | null;
+  verified_at?: string | null;
   exact_address?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface PropertyVideoRow {
+  id: string;
+  property_id: string;
+  owner_id: string;
+  media_type: 'video';
+  storage_path: string;
+  display_order: number;
+  moderation_status: string;
+  duration_seconds: number | null;
+  created_at: string;
+  url?: string | null;
+}
+
+export interface PropertyVerificationSubmission {
+  id: string;
+  property_id: string;
+  owner_id: string;
+  ownership_document_path: string | null;
+  lease_document_path: string | null;
+  physical_code: string;
+  physical_code_photo_path: string;
+  status: VerificationStatus;
+  notes: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  ownership_document_url?: string | null;
+  lease_document_url?: string | null;
+  physical_code_photo_url?: string | null;
+}
+
+export interface PropertyVerificationState {
+  property: {
+    id: string;
+    verification_status: VerificationStatus;
+    verification_code: string | null;
+    verification_notes: string | null;
+    verified_at: string | null;
+  };
+  submission: PropertyVerificationSubmission | null;
+}
+
+export interface AdminPropertyVerificationItem extends PropertyVerificationSubmission {
+  property?: {
+    id: string;
+    title: string;
+    city: string;
+    neighbourhood: string;
+    owner_id: string;
+    listing_status: ListingStatus;
+    verification_status: VerificationStatus;
+  } | null;
+  owner?: PublicProfile | null;
 }
 
 export interface PropertyScoreRow {
@@ -171,6 +231,7 @@ export interface SearchProperty {
   amenities: string[];
   house_rules: string[];
   listing_status: ListingStatus;
+  verification_status?: VerificationStatus;
   score?: SearchScore;
   photos: string[];
 }
@@ -178,6 +239,7 @@ export interface SearchProperty {
 export interface PropertyDetail extends PropertyRow {
   property_scores?: PropertyScoreRow[];
   property_photos?: PropertyPhotoRow[];
+  videos?: PropertyVideoRow[];
   owner?: PublicProfile;
 }
 

@@ -1,6 +1,12 @@
 import { api, ApiError } from '@/lib/api/client';
-import { getSupabase, propertyPhotoBucket, verificationBucket } from '@/lib/supabase';
 import { isDemoMode } from '@/lib/demo/store';
+import {
+  getSupabase,
+  propertyPhotoBucket,
+  propertyVerificationBucket,
+  propertyVideoBucket,
+  verificationBucket,
+} from '@/lib/supabase';
 import type {
   AvailabilityDay,
   AvailabilityStatus,
@@ -12,10 +18,13 @@ import type {
   CreateReviewInput,
   CreateSwapInput,
   CreditTransaction,
+  AdminPropertyVerificationItem,
   Conversation,
   Profile,
   PropertyDetail,
   PropertyPhotoRow,
+  PropertyVerificationState,
+  PropertyVideoRow,
   PublicProfile,
   Report,
   Message,
@@ -98,7 +107,14 @@ export async function addPropertyPhoto(id: string, storagePath: string, displayO
   return result.data;
 }
 
-export async function uploadPropertyPhoto(file: File, propertyId: string): Promise<string> {
+export async function uploadPropertyPhoto(
+  file: File,
+  propertyId: string,
+  ownerId: string,
+): Promise<string> {
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const path = `${ownerId}/${propertyId}/${Date.now()}-${safeName}`;
+  if (isDemoMode()) return path;
   const supabase = getSupabase();
   if (!supabase) {
     throw new ApiError(
@@ -107,8 +123,6 @@ export async function uploadPropertyPhoto(file: File, propertyId: string): Promi
       0,
     );
   }
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-  const path = `${propertyId}/${Date.now()}-${safeName}`;
   const { error } = await supabase.storage.from(propertyPhotoBucket()).upload(path, file, {
     cacheControl: '3600',
     upsert: false,
@@ -119,6 +133,113 @@ export async function uploadPropertyPhoto(file: File, propertyId: string): Promi
 
 export async function deletePropertyPhoto(id: string, photoId: string) {
   await api.delete(`/properties/${id}/photos/${photoId}`);
+}
+
+/* ---------------------------- property media ---------------------------- */
+
+export async function getPropertyMedia(id: string) {
+  const result = await api.get<PropertyVideoRow[]>(`/properties/${id}/media`);
+  return result.data ?? [];
+}
+
+export async function addPropertyVideo(
+  id: string,
+  storagePath: string,
+  durationSeconds?: number,
+  displayOrder = 0,
+) {
+  const result = await api.post<PropertyVideoRow>(`/properties/${id}/media`, {
+    media_type: 'video',
+    storage_path: storagePath,
+    duration_seconds: durationSeconds,
+    display_order: displayOrder,
+  });
+  return result.data;
+}
+
+export async function deletePropertyVideo(id: string, mediaId: string) {
+  await api.delete(`/properties/${id}/media/${mediaId}`);
+}
+
+export async function uploadPropertyVideo(
+  file: File,
+  propertyId: string,
+  ownerId: string,
+): Promise<string> {
+  const allowed = ['video/mp4', 'video/quicktime', 'video/webm'];
+  if (!allowed.includes(file.type)) {
+    throw new ApiError('VALIDATION_ERROR', 'Use an MP4, MOV or WebM video.', 400);
+  }
+  if (file.size > 100 * 1024 * 1024) {
+    throw new ApiError('VALIDATION_ERROR', 'Keep the video under 100 MB.', 400);
+  }
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const path = `${ownerId}/${propertyId}/${Date.now()}-${safeName}`;
+  if (isDemoMode()) return path;
+  const supabase = getSupabase();
+  if (!supabase) {
+    throw new ApiError(
+      'BACKEND_UNAVAILABLE',
+      'Supabase Storage is not configured, so videos cannot be uploaded.',
+      0,
+    );
+  }
+  const { error } = await supabase.storage.from(propertyVideoBucket()).upload(path, file, {
+    cacheControl: '3600',
+    upsert: false,
+  });
+  if (error) throw new ApiError('UPLOAD_FAILED', `Upload failed: ${error.message}`, 400);
+  return path;
+}
+
+/* ------------------------- property verification ------------------------ */
+
+export async function getPropertyVerification(id: string) {
+  const result = await api.get<PropertyVerificationState>(`/properties/${id}/verification`);
+  return result.data;
+}
+
+export async function generatePropertyVerificationCode(id: string) {
+  const result = await api.post<{ verification_code: string; instructions: string }>(
+    `/properties/${id}/verification/code`,
+  );
+  return result.data;
+}
+
+export async function submitPropertyVerification(
+  id: string,
+  input: {
+    ownership_document_path?: string;
+    lease_document_path?: string;
+    physical_code_photo_path: string;
+  },
+) {
+  const result = await api.post(`/properties/${id}/verification`, input);
+  return result.data;
+}
+
+export async function uploadPropertyVerificationDocument(
+  file: File,
+  propertyId: string,
+  ownerId: string,
+): Promise<string> {
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const path = `${ownerId}/${propertyId}/${Date.now()}-${safeName}`;
+  if (isDemoMode()) return path;
+  const supabase = getSupabase();
+  if (!supabase) {
+    throw new ApiError(
+      'BACKEND_UNAVAILABLE',
+      'Supabase Storage is not configured, so documents cannot be uploaded.',
+      0,
+    );
+  }
+  const { error } = await supabase.storage.from(propertyVerificationBucket()).upload(path, file, {
+    cacheControl: '3600',
+    upsert: false,
+  });
+  if (error) throw new ApiError('UPLOAD_FAILED', `Upload failed: ${error.message}`, 400);
+  return path;
 }
 
 /* -------------------------------- profile ------------------------------- */
@@ -313,14 +434,42 @@ export interface VerificationQueueItem {
   verification_status: string;
 }
 
-/**
- * The production API exposes a per-user decision endpoint but not a queue listing.
- * Demo mode provides a small queue so the admin console can be exercised end-to-end.
- */
 export async function getAdminVerificationQueue(): Promise<VerificationQueueItem[]> {
-  if (!isDemoMode()) return [];
-  const result = await api.get<VerificationQueueItem[]>('/admin/verification');
+  const result = await api.get<
+    Array<{
+      id: string;
+      user_id?: string;
+      display_name?: string;
+      verification_status?: string;
+      profiles?: { id: string; display_name: string; verification_status: string };
+    }>
+  >('/admin/verification');
+  return (result.data ?? []).map((row) => ({
+    id: row.user_id ?? row.profiles?.id ?? row.id,
+    display_name: row.display_name ?? row.profiles?.display_name ?? 'Member',
+    verification_status: row.verification_status ?? row.profiles?.verification_status ?? 'pending',
+  }));
+}
+
+export async function getAdminPropertyVerificationQueue(status = 'pending') {
+  const result = await api.get<AdminPropertyVerificationItem[]>(
+    `/admin/property-verification${queryString({ status })}`,
+  );
   return result.data ?? [];
+}
+
+export async function decidePropertyVerification(
+  submissionId: string,
+  decision: 'verified' | 'rejected',
+  notes?: string,
+) {
+  const result = await api.post<{
+    submission_id: string;
+    property_id: string;
+    verification_status: string;
+    notes?: string;
+  }>(`/admin/property-verification/${submissionId}`, { decision, notes });
+  return result.data;
 }
 
 export type { PublicProfile };

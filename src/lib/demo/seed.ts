@@ -5,6 +5,8 @@ import type {
   Message,
   Profile,
   PropertyRow,
+  PropertyVerificationSubmission,
+  PropertyVideoRow,
   Report,
   ScoreBreakdown,
   SwapAgreement,
@@ -14,7 +16,7 @@ import type {
 import { calculateSwapScore } from '@/lib/score';
 import { addDaysISO, toISODate } from '@/lib/dates';
 
-export const DEMO_DB_VERSION = 4;
+export const DEMO_DB_VERSION = 5;
 
 export interface DemoHost {
   id: string;
@@ -59,6 +61,8 @@ export interface DemoDB {
   reviews: DemoReview[];
   conversations: Conversation[];
   messages: Message[];
+  propertyVerification: Record<string, PropertyVerificationSubmission>;
+  propertyVideos: Record<string, PropertyVideoRow[]>;
 }
 
 export const DEMO_USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -108,6 +112,7 @@ function property(
   },
 ): DemoProperty {
   return {
+    verification_status: 'verified',
     ...input,
     created_at: stamp(input.createdDaysAgo ?? 90),
     updated_at: stamp(3),
@@ -599,5 +604,7 @@ export function buildSeed(): DemoDB {
     ],
     conversations,
     messages,
+    propertyVerification: {},
+    propertyVideos: {},
   };
 }

@@ -157,6 +157,27 @@ export function VerificationBadge({
   );
 }
 
+const propertyVerificationLabel: Record<VerificationStatus, string> = {
+  unverified: 'Property not verified',
+  pending: 'Property under review',
+  verified: 'Verified home',
+  rejected: 'Property verification declined',
+};
+
+export function PropertyVerificationBadge({
+  status,
+  className,
+}: {
+  status: VerificationStatus;
+  className?: string;
+}) {
+  return (
+    <Badge tone={verificationTone[status]} dot className={className}>
+      {propertyVerificationLabel[status]}
+    </Badge>
+  );
+}
+
 const reportTone: Record<ReportStatus, Tone> = {
   open: 'gold',
   under_review: 'sky',

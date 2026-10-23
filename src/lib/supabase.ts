@@ -39,3 +39,11 @@ export function verificationBucket() {
 export function propertyPhotoBucket() {
   return process.env.NEXT_PUBLIC_SUPABASE_PHOTO_BUCKET || 'property-photos';
 }
+
+export function propertyVideoBucket() {
+  return process.env.NEXT_PUBLIC_SUPABASE_VIDEO_BUCKET || 'property-videos';
+}
+
+export function propertyVerificationBucket() {
+  return process.env.NEXT_PUBLIC_SUPABASE_PROPERTY_VERIFICATION_BUCKET || 'property-verification';
+}

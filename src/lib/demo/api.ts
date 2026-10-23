@@ -19,6 +19,8 @@ import type {
   PropertyDetail,
   PropertyPhotoRow,
   PropertyScoreRow,
+  PropertyVerificationSubmission,
+  PropertyVideoRow,
   PublicProfile,
   Report,
   SearchProperty,
@@ -82,6 +84,7 @@ function detail(property: DemoProperty, db: DemoDB): PropertyDetail {
     ...property,
     property_scores: [scoreRow(property)],
     property_photos: photoRows(property),
+    videos: db.propertyVideos?.[property.id] ?? [],
     owner: publicProfile(db, property.owner_id),
   };
 }
@@ -100,6 +103,7 @@ function searchItem(property: DemoProperty): SearchProperty {
     amenities: property.amenities,
     house_rules: property.house_rules,
     listing_status: property.listing_status,
+    verification_status: property.verification_status ?? 'verified',
     score: {
       total_score: property.score.total_score,
       grade: property.score.grade,
@@ -258,6 +262,7 @@ export async function demoRequest<T>(
       id: uuid(),
       owner_id: DEMO_USER_ID,
       listing_status: 'pending_review',
+      verification_status: 'unverified',
       amenities: input.amenities ?? [],
       house_rules: input.house_rules ?? [],
       created_at: nowISO(),
@@ -360,6 +365,139 @@ export async function demoRequest<T>(
     }
     const index = Number(photoDeleteMatch[2].split('-').pop());
     if (Number.isFinite(index)) property.photos.splice(index, 1);
+    saveDemoDB(db);
+    return { data: { deleted: true } as unknown as T };
+  }
+
+  /* ------------------------- property verification ---------------------- */
+  const verificationMatch = pathname.match(/^properties\/([^/]+)\/verification$/);
+  if (verificationMatch) {
+    const property = findProperty(db, verificationMatch[1]);
+    if (property.owner_id !== DEMO_USER_ID && db.profile.role !== 'admin') {
+      throw new ApiError('FORBIDDEN', 'Only the property owner can manage verification', 403);
+    }
+
+    if (verb === 'GET') {
+      return {
+        data: {
+          property: {
+            id: property.id,
+            verification_status: property.verification_status ?? 'unverified',
+            verification_code: property.verification_code ?? null,
+            verification_notes: property.verification_notes ?? null,
+            verified_at: property.verified_at ?? null,
+          },
+          submission: db.propertyVerification[property.id] ?? null,
+        } as unknown as T,
+      };
+    }
+
+    if (verb === 'POST') {
+      const input = body as {
+        ownership_document_path?: string;
+        lease_document_path?: string;
+        physical_code_photo_path?: string;
+      };
+      if (!input?.ownership_document_path && !input?.lease_document_path) {
+        throw new ApiError('VALIDATION_ERROR', 'Add an ownership or lease document', 400);
+      }
+      if (!input?.physical_code_photo_path) {
+        throw new ApiError('VALIDATION_ERROR', 'Upload a photo of the verification code', 400);
+      }
+      const code = property.verification_code ?? 'A1B2C3';
+      const submission: PropertyVerificationSubmission = {
+        id: uuid(),
+        property_id: property.id,
+        owner_id: DEMO_USER_ID,
+        ownership_document_path: input.ownership_document_path ?? null,
+        lease_document_path: input.lease_document_path ?? null,
+        physical_code: code,
+        physical_code_photo_path: input.physical_code_photo_path,
+        status: 'pending',
+        notes: null,
+        reviewed_by: null,
+        reviewed_at: null,
+        created_at: nowISO(),
+        updated_at: nowISO(),
+      };
+      property.verification_status = 'pending';
+      property.verification_code = code;
+      property.verification_notes = null;
+      property.verified_at = null;
+      db.propertyVerification[property.id] = submission;
+      saveDemoDB(db);
+      return { data: submission as unknown as T };
+    }
+  }
+
+  const verificationCodeMatch = pathname.match(/^properties\/([^/]+)\/verification\/code$/);
+  if (verificationCodeMatch && verb === 'POST') {
+    const property = findProperty(db, verificationCodeMatch[1]);
+    if (property.owner_id !== DEMO_USER_ID) {
+      throw new ApiError('FORBIDDEN', 'Only the property owner can request a verification code', 403);
+    }
+    if (property.verification_status === 'verified') {
+      throw new ApiError('INVALID_STATE_TRANSITION', 'This property is already verified', 400);
+    }
+    property.verification_code = uuid().replace(/-/g, '').slice(0, 6).toUpperCase();
+    saveDemoDB(db);
+    return {
+      data: {
+        verification_code: property.verification_code,
+        instructions:
+          'Write this code on a card, place it inside the home, and upload a clear photo showing the card in the room.',
+      } as unknown as T,
+    };
+  }
+
+  const mediaMatch = pathname.match(/^properties\/([^/]+)\/media$/);
+  if (mediaMatch) {
+    const property = findProperty(db, mediaMatch[1]);
+    const store = (db.propertyVideos[property.id] = db.propertyVideos[property.id] ?? []);
+
+    if (verb === 'GET') {
+      if (property.owner_id !== DEMO_USER_ID && db.profile.role !== 'admin') {
+        throw new ApiError('FORBIDDEN', 'Only the property owner can view private media', 403);
+      }
+      return { data: store as unknown as T };
+    }
+
+    if (verb === 'POST') {
+      if (property.owner_id !== DEMO_USER_ID) {
+        throw new ApiError('FORBIDDEN', 'Only the property owner can add media', 403);
+      }
+      const input = body as {
+        storage_path?: string;
+        duration_seconds?: number;
+        display_order?: number;
+      };
+      if (!input?.storage_path) throw new ApiError('VALIDATION_ERROR', 'A storage path is required', 400);
+      const video: PropertyVideoRow = {
+        id: uuid(),
+        property_id: property.id,
+        owner_id: DEMO_USER_ID,
+        media_type: 'video',
+        storage_path: input.storage_path,
+        display_order: input.display_order ?? store.length,
+        moderation_status: 'approved',
+        duration_seconds: input.duration_seconds ?? null,
+        created_at: nowISO(),
+        url: null,
+      };
+      store.push(video);
+      saveDemoDB(db);
+      return { data: video as unknown as T };
+    }
+  }
+
+  const mediaDeleteMatch = pathname.match(/^properties\/([^/]+)\/media\/([^/]+)$/);
+  if (mediaDeleteMatch && verb === 'DELETE') {
+    const property = findProperty(db, mediaDeleteMatch[1]);
+    if (property.owner_id !== DEMO_USER_ID && db.profile.role !== 'admin') {
+      throw new ApiError('FORBIDDEN', 'You do not own this listing', 403);
+    }
+    const store = db.propertyVideos[property.id] ?? [];
+    db.propertyVideos[property.id] = store.filter((item) => item.id !== mediaDeleteMatch[2]);
     saveDemoDB(db);
     return { data: { deleted: true } as unknown as T };
   }
@@ -1038,6 +1176,77 @@ export async function demoRequest<T>(
     return {
       data: {
         user_id: targetId,
+        verification_status: input.decision,
+        notes: input.notes ?? null,
+      } as unknown as T,
+    };
+  }
+
+  if (pathname === 'admin/property-verification' && verb === 'GET') {
+    if (db.profile.role !== 'admin') {
+      throw new ApiError('FORBIDDEN', 'Admin privilege required', 403);
+    }
+    const status = query.get('status') ?? 'pending';
+    const items = Object.values(db.propertyVerification)
+      .filter((submission) => submission.status === status)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map((submission) => {
+        const property = db.properties.find((entry) => entry.id === submission.property_id);
+        return {
+          ...submission,
+          property: property
+            ? {
+                id: property.id,
+                title: property.title,
+                city: property.city,
+                neighbourhood: property.neighbourhood,
+                owner_id: property.owner_id,
+                listing_status: property.listing_status,
+                verification_status: property.verification_status ?? 'unverified',
+              }
+            : null,
+          owner: publicProfile(db, submission.owner_id),
+        };
+      });
+    return { data: items as unknown as T };
+  }
+
+  const adminPropertyVerificationMatch = pathname.match(/^admin\/property-verification\/([^/]+)$/);
+  if (adminPropertyVerificationMatch && verb === 'POST') {
+    if (db.profile.role !== 'admin') {
+      throw new ApiError('FORBIDDEN', 'Admin privilege required', 403);
+    }
+    const submission = Object.values(db.propertyVerification).find(
+      (entry) => entry.id === adminPropertyVerificationMatch[1],
+    );
+    if (!submission) throw new ApiError('NOT_FOUND', 'Verification submission not found', 404);
+    if (submission.status !== 'pending') {
+      throw new ApiError('INVALID_STATE_TRANSITION', 'This submission has already been reviewed', 400);
+    }
+    const input = body as { decision: 'verified' | 'rejected'; notes?: string };
+    if (input?.decision !== 'verified' && input?.decision !== 'rejected') {
+      throw new ApiError('VALIDATION_ERROR', 'Decision must be verified or rejected', 400);
+    }
+    if (input.decision === 'rejected' && (input.notes?.trim().length ?? 0) < 10) {
+      throw new ApiError('VALIDATION_ERROR', 'Add at least 10 characters of notes when rejecting', 400);
+    }
+    const property = db.properties.find((entry) => entry.id === submission.property_id);
+    submission.status = input.decision;
+    submission.notes = input.notes ?? null;
+    submission.reviewed_by = DEMO_USER_ID;
+    submission.reviewed_at = nowISO();
+    submission.updated_at = nowISO();
+    if (property) {
+      property.verification_status = input.decision;
+      property.verification_notes = input.notes ?? null;
+      property.verified_at = input.decision === 'verified' ? nowISO() : null;
+      if (input.decision === 'verified') property.listing_status = 'active';
+    }
+    saveDemoDB(db);
+    return {
+      data: {
+        submission_id: submission.id,
+        property_id: submission.property_id,
         verification_status: input.decision,
         notes: input.notes ?? null,
       } as unknown as T,

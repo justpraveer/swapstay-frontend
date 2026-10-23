@@ -26,14 +26,21 @@ import { Input, Select, Textarea } from '@/components/ui/Input';
 import { EmptyState, ErrorState, LoadingBlock, Tabs } from '@/components/ui/Primitives';
 import { useToast } from '@/components/ui/Toast';
 import {
+  decidePropertyVerification,
   decideVerification,
+  getAdminPropertyVerificationQueue,
   getAdminReports,
   getAdminVerificationQueue,
 } from '@/lib/api';
 import { errorMessage } from '@/lib/api/client';
 import { formatDate, relativeTime } from '@/lib/dates';
 import { useApiQuery } from '@/lib/hooks';
-import type { Report, ReportCategory, VerificationStatus } from '@/lib/types';
+import type {
+  AdminPropertyVerificationItem,
+  Report,
+  ReportCategory,
+  VerificationStatus,
+} from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 8;
@@ -86,6 +93,32 @@ function AdminContent() {
   } | null>(null);
 
   const pendingQueue = queue.data ?? [];
+  const propertyQueue = useApiQuery(() => getAdminPropertyVerificationQueue('pending'), []);
+  const [propertyNotes, setPropertyNotes] = useState<Record<string, string>>({});
+  const [decidingPropertyId, setDecidingPropertyId] = useState<string | null>(null);
+
+  async function decideProperty(item: AdminPropertyVerificationItem, decision: 'verified' | 'rejected') {
+    const notes = propertyNotes[item.id]?.trim() ?? '';
+    if (decision === 'rejected' && notes.length < 10) {
+      toastError('Add review notes', 'Explain what is missing or unclear before rejecting the home.');
+      return;
+    }
+    setDecidingPropertyId(item.id);
+    try {
+      await decidePropertyVerification(item.id, decision, notes || undefined);
+      success(
+        decision === 'verified' ? 'Home verified' : 'Home verification rejected',
+        decision === 'verified'
+          ? 'The listing is now active and carries the verified-home badge.'
+          : 'The host can resubmit with better evidence.',
+      );
+      propertyQueue.refresh();
+    } catch (error) {
+      toastError('Decision not recorded', errorMessage(error));
+    } finally {
+      setDecidingPropertyId(null);
+    }
+  }
 
   function changeStatus(next: string) {
     setStatus(next);
@@ -164,6 +197,139 @@ function AdminContent() {
           instantly, including your own badge if you select your account.
         </div>
       )}
+
+      <section className="mt-8">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-[20px] leading-tight">Home verification</h2>
+            <p className="mt-0.5 text-[11.5px] text-ink-500">
+              Review ownership evidence and the physical code photo before a listing goes live.
+            </p>
+          </div>
+          <Badge tone="gold" dot>
+            {propertyQueue.loading ? 'Loading…' : `${propertyQueue.data?.length ?? 0} pending`}
+          </Badge>
+        </div>
+
+        {propertyQueue.loading && <LoadingBlock label="Loading home verification queue" className="py-14" />}
+
+        {!propertyQueue.loading && propertyQueue.error && (
+          <ErrorState
+            className="mt-4"
+            title="Home verification queue could not load"
+            message={propertyQueue.error}
+            code={propertyQueue.errorCode}
+            onRetry={propertyQueue.refresh}
+          />
+        )}
+
+        {!propertyQueue.loading && !propertyQueue.error && (propertyQueue.data?.length ?? 0) === 0 && (
+          <div className="mt-4">
+            <EmptyState
+              icon={<Building2 className="h-5 w-5" />}
+              title="No homes awaiting verification"
+              description="New ownership submissions will appear here with their documents and code photo."
+            />
+          </div>
+        )}
+
+        {!propertyQueue.loading && !propertyQueue.error && (propertyQueue.data?.length ?? 0) > 0 && (
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            {(propertyQueue.data ?? []).map((item) => (
+              <article key={item.id} className="rounded-3xl border border-sand-200/90 bg-white/90 p-5 shadow-soft">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-[14px] font-semibold text-ink-900">
+                      {item.property?.title ?? 'Listing'}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-ink-500">
+                      {item.property?.neighbourhood}, {item.property?.city} ·{' '}
+                      {item.owner?.display_name ?? 'Host'} · {relativeTime(item.created_at)}
+                    </p>
+                  </div>
+                  <Badge tone="gold" dot>
+                    Pending
+                  </Badge>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-600">
+                  <span className="rounded-full border border-sand-300 bg-sand-50 px-2.5 py-1">
+                    Code <span className="font-mono font-semibold text-ink-900">{item.physical_code}</span>
+                  </span>
+                  {item.ownership_document_url && (
+                    <a
+                      href={item.ownership_document_url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-2.5 py-1 font-medium hover:text-pine"
+                    >
+                      Ownership doc <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  )}
+                  {item.lease_document_url && (
+                    <a
+                      href={item.lease_document_url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-2.5 py-1 font-medium hover:text-pine"
+                    >
+                      Lease doc <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  )}
+                  {item.physical_code_photo_url && (
+                    <a
+                      href={item.physical_code_photo_url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-2.5 py-1 font-medium hover:text-pine"
+                    >
+                      Code photo <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  )}
+                </div>
+
+                <Textarea
+                  className="mt-3"
+                  rows={2}
+                  maxLength={500}
+                  placeholder="Review notes (required when rejecting)"
+                  value={propertyNotes[item.id] ?? ''}
+                  onChange={(event) =>
+                    setPropertyNotes((current) => ({ ...current, [item.id]: event.target.value }))
+                  }
+                />
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => void decideProperty(item, 'verified')}
+                    loading={decidingPropertyId === item.id}
+                    leading={<ShieldCheck className="h-3.5 w-3.5" />}
+                  >
+                    Verify home
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() => void decideProperty(item, 'rejected')}
+                    disabled={decidingPropertyId === item.id}
+                    leading={<ShieldAlert className="h-3.5 w-3.5" />}
+                  >
+                    Reject
+                  </Button>
+                  {item.property?.id && (
+                    <Link href={`/properties/${item.property.id}`}>
+                      <Button size="sm" variant="ghost" trailing={<ExternalLink className="h-3 w-3" />}>
+                        Open listing
+                      </Button>
+                    </Link>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[1.6fr_1fr]">
         <section>

@@ -1,40 +1,62 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowUpRight,
   CalendarDays,
   Camera,
+  CheckCircle2,
+  FileCheck2,
+  FileText,
   ImagePlus,
   Info,
+  KeyRound,
   Loader2,
+  ShieldCheck,
   Sparkles,
   Trash2,
   Upload,
+  Video,
 } from 'lucide-react';
 import { RequireAuth } from '@/components/auth/RequireAuth';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { PropertyForm } from '@/components/property/PropertyForm';
 import { PropertyImage } from '@/components/property/PropertyImage';
 import { AvailabilityCalendar } from '@/components/availability/AvailabilityCalendar';
-import { ListingStatusBadge } from '@/components/ui/Badge';
+import { ListingStatusBadge, PropertyVerificationBadge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { ErrorState, LoadingBlock, ScoreRing, Tabs } from '@/components/ui/Primitives';
 import { useToast } from '@/components/ui/Toast';
 import {
   addPropertyPhoto,
+  addPropertyVideo,
   deletePropertyPhoto,
+  deletePropertyVideo,
+  generatePropertyVerificationCode,
   getProperty,
+  getPropertyMedia,
+  getPropertyVerification,
+  submitPropertyVerification,
   updateProperty,
   uploadPropertyPhoto,
+  uploadPropertyVerificationDocument,
+  uploadPropertyVideo,
 } from '@/lib/api';
 import { ApiError, errorMessage } from '@/lib/api/client';
+import { formatDate } from '@/lib/dates';
 import { useApiQuery } from '@/lib/hooks';
-import type { CreatePropertyInput, PropertyPhotoRow } from '@/lib/types';
+import { cn } from '@/lib/utils';
+import type {
+  CreatePropertyInput,
+  PropertyPhotoRow,
+  PropertyVerificationState,
+  PropertyVideoRow,
+} from '@/lib/types';
 
 function ManageListingContent() {
   const params = useParams<{ id: string }>();
@@ -117,6 +139,7 @@ function ManageListingContent() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <ListingStatusBadge status={property.listing_status} />
+            <PropertyVerificationBadge status={property.verification_status ?? 'unverified'} />
             <span className="text-[11px] text-ink-500">
               {property.neighbourhood}, {property.city}
             </span>
@@ -146,7 +169,8 @@ function ManageListingContent() {
         tabs={[
           { id: 'details', label: 'Details' },
           { id: 'availability', label: 'Availability' },
-          { id: 'photos', label: 'Photos', count: property.property_photos?.length ?? 0 },
+          { id: 'photos', label: 'Photos & video', count: property.property_photos?.length ?? 0 },
+          { id: 'verification', label: 'Verification' },
         ]}
       />
 
@@ -200,6 +224,12 @@ function ManageListingContent() {
                     <dt className="text-ink-500">Photos</dt>
                     <dd className="font-medium text-ink-800">{property.property_photos?.length ?? 0}</dd>
                   </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-500">Home verification</dt>
+                    <dd className="font-medium text-ink-800 capitalize">
+                      {(property.verification_status ?? 'unverified').replace('_', ' ')}
+                    </dd>
+                  </div>
                 </dl>
               </div>
 
@@ -247,18 +277,399 @@ function ManageListingContent() {
           </div>
         )}
 
-        {tab === 'photos' && <PhotosPanel propertyId={property.id} photos={property.property_photos ?? []} onChanged={query.refresh} />}
+        {tab === 'photos' && (
+          <PhotosPanel
+            propertyId={property.id}
+            ownerId={property.owner_id}
+            photos={property.property_photos ?? []}
+            onChanged={query.refresh}
+          />
+        )}
+
+        {tab === 'verification' && (
+          <VerificationPanel
+            propertyId={property.id}
+            ownerId={property.owner_id}
+            propertyStatus={property.verification_status ?? 'unverified'}
+            onChanged={query.refresh}
+          />
+        )}
       </div>
     </div>
   );
 }
 
+function readVideoDuration(file: File): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    const element = document.createElement('video');
+    const objectUrl = URL.createObjectURL(file);
+    const done = (value?: number) => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(value);
+    };
+    element.preload = 'metadata';
+    element.onloadedmetadata = () => done(Math.round(element.duration) || undefined);
+    element.onerror = () => done(undefined);
+    element.src = objectUrl;
+  });
+}
+
+function VerificationPanel({
+  propertyId,
+  ownerId,
+  propertyStatus,
+  onChanged,
+}: {
+  propertyId: string;
+  ownerId: string;
+  propertyStatus: string;
+  onChanged: () => void;
+}) {
+  const { success, error: toastError } = useToast();
+  const query = useApiQuery(() => getPropertyVerification(propertyId), [propertyId]);
+  const state: PropertyVerificationState | undefined = query.data ?? undefined;
+  const status = (state?.property.verification_status ?? propertyStatus) as
+    | 'unverified'
+    | 'pending'
+    | 'verified'
+    | 'rejected';
+  const code = state?.property.verification_code ?? null;
+  const submission = state?.submission ?? null;
+
+  const [generating, setGenerating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [ownership, setOwnership] = useState<File | null>(null);
+  const [lease, setLease] = useState<File | null>(null);
+  const [codePhoto, setCodePhoto] = useState<File | null>(null);
+
+  const locked = status === 'pending' || status === 'verified';
+
+  async function generateCode() {
+    setGenerating(true);
+    try {
+      await generatePropertyVerificationCode(propertyId);
+      success(
+        'Verification code ready',
+        'Place the code inside the home and upload a photo showing it in the room.',
+      );
+      query.refresh();
+    } catch (error) {
+      toastError('Code not generated', errorMessage(error));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function submit() {
+    if (!code) {
+      toastError('Generate a code first', 'Create the physical verification code before submitting.');
+      return;
+    }
+    if (!ownership && !lease) {
+      toastError('Add a document', 'Upload an ownership document or a lease/rental agreement.');
+      return;
+    }
+    if (!codePhoto) {
+      toastError('Add the code photo', 'Upload a photo showing the verification code inside the home.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const ownershipPath = ownership
+        ? await uploadPropertyVerificationDocument(ownership, propertyId, ownerId)
+        : undefined;
+      const leasePath = lease
+        ? await uploadPropertyVerificationDocument(lease, propertyId, ownerId)
+        : undefined;
+      const codePhotoPath = await uploadPropertyVerificationDocument(codePhoto, propertyId, ownerId);
+      await submitPropertyVerification(propertyId, {
+        ownership_document_path: ownershipPath,
+        lease_document_path: leasePath,
+        physical_code_photo_path: codePhotoPath,
+      });
+      success('Submitted for review', 'Trust & safety will review the documents and code photo.');
+      setOwnership(null);
+      setLease(null);
+      setCodePhoto(null);
+      query.refresh();
+      onChanged();
+    } catch (error) {
+      toastError('Verification not submitted', errorMessage(error));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const banner =
+    status === 'verified'
+      ? {
+          tone: 'bg-sage-50 text-pine border-sage-200',
+          icon: <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />,
+          title: 'This home is verified',
+          body: 'Ownership evidence and the physical code photo were approved. Guests see a verified-home badge.',
+        }
+      : status === 'pending'
+        ? {
+            tone: 'bg-[#fbf3df] text-[#7a5a1c] border-[#e6cf9d]',
+            icon: <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />,
+            title: 'Review in progress',
+            body: 'Trust & safety is checking your documents and code photo. You cannot edit this submission while it is pending.',
+          }
+        : status === 'rejected'
+          ? {
+              tone: 'bg-[#fdf4f2] text-[#8d3527] border-[#e3bdb4]',
+              icon: <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />,
+              title: 'Verification was declined',
+              body: submission?.notes || 'Fix the issue described in the review notes, then submit again.',
+            }
+          : {
+              tone: 'bg-[#f4efe4]/80 text-ink-600 border-sand-200',
+              icon: <Info className="mt-0.5 h-4 w-4 shrink-0" />,
+              title: 'Verify this home to publish it',
+              body: 'Add ownership or lease evidence plus a photo of the physical code. Verified homes can go live and accept swaps.',
+            };
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[1.65fr_0.9fr]">
+      <div className="space-y-5">
+        <div className={cn('flex items-start gap-3 rounded-2xl border p-4 text-[12px] leading-5', banner.tone)}>
+          {banner.icon}
+          <div>
+            <p className="font-semibold">{banner.title}</p>
+            <p className="mt-0.5 opacity-90">{banner.body}</p>
+          </div>
+        </div>
+
+        {!locked && (
+          <>
+            <section className="card p-5 sm:p-6">
+              <div className="flex items-center gap-2">
+                <span className="grid h-8 w-8 place-items-center rounded-xl bg-sage-100 text-pine">
+                  <KeyRound className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-[18px] leading-tight">Physical verification code</h2>
+                  <p className="text-[11.5px] text-ink-500">
+                    We issue a one-time code. Write it on a card and photograph it inside the home.
+                  </p>
+                </div>
+              </div>
+
+              {code ? (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50/70 px-4 py-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-500">
+                      Your code
+                    </p>
+                    <p className="mt-0.5 font-mono text-[24px] font-semibold tracking-[0.2em] text-ink-900">
+                      {code}
+                    </p>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={generateCode} loading={generating}>
+                    Rotate code
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  className="mt-4"
+                  size="sm"
+                  onClick={generateCode}
+                  loading={generating}
+                  leading={<KeyRound className="h-3.5 w-3.5" />}
+                >
+                  Generate verification code
+                </Button>
+              )}
+
+              <p className="mt-3 text-[10.5px] leading-5 text-ink-500">
+                The code proves someone was physically inside the property. Do not reuse a code from another
+                home and do not edit the photo.
+              </p>
+            </section>
+
+            <section className="card p-5 sm:p-6">
+              <div className="flex items-center gap-2">
+                <span className="grid h-8 w-8 place-items-center rounded-xl bg-sage-100 text-pine">
+                  <FileCheck2 className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-[18px] leading-tight">Ownership evidence</h2>
+                  <p className="text-[11.5px] text-ink-500">
+                    Upload one ownership document or one lease/rental agreement. Files stay private.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <FilePicker
+                  label="Ownership document"
+                  hint="Sale deed, property tax receipt or utility bill in your name."
+                  accept="application/pdf,image/*"
+                  file={ownership}
+                  onChange={setOwnership}
+                  icon={<FileText className="h-4 w-4" />}
+                />
+                <FilePicker
+                  label="Lease or rental agreement"
+                  hint="Current agreement plus a hosting-authority note if you rent."
+                  accept="application/pdf,image/*"
+                  file={lease}
+                  onChange={setLease}
+                  icon={<FileText className="h-4 w-4" />}
+                />
+              </div>
+
+              <div className="mt-4">
+                <FilePicker
+                  label="Photo of the verification code"
+                  hint="Show the code card clearly in a real room, with enough context to recognise the space."
+                  accept="image/*"
+                  file={codePhoto}
+                  onChange={setCodePhoto}
+                  icon={<Camera className="h-4 w-4" />}
+                />
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-sand-200/70 pt-4">
+                <p className="text-[10.5px] leading-5 text-ink-500">
+                  Documents are reviewed by an admin and are never shown publicly.
+                </p>
+                <Button onClick={submit} loading={submitting} leading={<ShieldCheck className="h-4 w-4" />}>
+                  Submit for verification
+                </Button>
+              </div>
+            </section>
+          </>
+        )}
+
+        {submission && (
+          <section className="card p-5">
+            <p className="eyebrow">Latest submission</p>
+            <dl className="mt-3 grid gap-2 text-[11.5px] sm:grid-cols-2">
+              <div>
+                <dt className="text-ink-500">Submitted</dt>
+                <dd className="font-medium text-ink-800">{formatDate(submission.created_at.slice(0, 10))}</dd>
+              </div>
+              <div>
+                <dt className="text-ink-500">Code used</dt>
+                <dd className="font-mono font-medium text-ink-800">{submission.physical_code}</dd>
+              </div>
+              <div>
+                <dt className="text-ink-500">Status</dt>
+                <dd className="font-medium capitalize text-ink-800">{submission.status}</dd>
+              </div>
+              {submission.reviewed_at && (
+                <div>
+                  <dt className="text-ink-500">Reviewed</dt>
+                  <dd className="font-medium text-ink-800">
+                    {formatDate(submission.reviewed_at.slice(0, 10))}
+                  </dd>
+                </div>
+              )}
+            </dl>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {submission.ownership_document_url && (
+                <a
+                  href={submission.ownership_document_url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-2.5 py-1 text-[10px] font-medium text-ink-600 hover:text-pine"
+                >
+                  Ownership doc <ArrowUpRight className="h-2.5 w-2.5" />
+                </a>
+              )}
+              {submission.lease_document_url && (
+                <a
+                  href={submission.lease_document_url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-2.5 py-1 text-[10px] font-medium text-ink-600 hover:text-pine"
+                >
+                  Lease doc <ArrowUpRight className="h-2.5 w-2.5" />
+                </a>
+              )}
+              {submission.physical_code_photo_url && (
+                <a
+                  href={submission.physical_code_photo_url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-2.5 py-1 text-[10px] font-medium text-ink-600 hover:text-pine"
+                >
+                  Code photo <ArrowUpRight className="h-2.5 w-2.5" />
+                </a>
+              )}
+            </div>
+            {submission.notes && (
+              <p className="mt-3 rounded-xl bg-sand-50 px-3 py-2.5 text-[10.5px] leading-5 text-ink-600">
+                <span className="font-semibold text-ink-800">Reviewer notes:</span> {submission.notes}
+              </p>
+            )}
+          </section>
+        )}
+      </div>
+
+      <aside className="space-y-4">
+        <div className="card p-5">
+          <p className="eyebrow">Why this matters</p>
+          <ul className="mt-2.5 space-y-2 text-[11.5px] leading-5 text-ink-600">
+            <li>Confirmed ownership or a valid lease protects both sides of a swap.</li>
+            <li>The physical code proves you can access the home you are listing.</li>
+            <li>Verified homes carry a badge in search and on the property page.</li>
+            <li>Only verified members can list, propose swaps and accept stays.</li>
+          </ul>
+        </div>
+        <div className="rounded-2xl bg-[#f4efe4]/80 p-4 text-[11px] leading-5 text-ink-600">
+          Never upload someone else&apos;s documents. Submissions are audit-logged, and fraudulent evidence
+          leads to account suspension.
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function FilePicker({
+  label,
+  hint,
+  accept,
+  file,
+  onChange,
+  icon,
+}: {
+  label: string;
+  hint: string;
+  accept: string;
+  file: File | null;
+  onChange: (file: File | null) => void;
+  icon: ReactNode;
+}) {
+  return (
+    <label className="flex cursor-pointer flex-col gap-1.5 rounded-2xl border border-dashed border-sand-300 bg-sand-50/50 px-4 py-3 transition hover:border-moss/50">
+      <span className="flex items-center gap-1.5 text-[11.5px] font-semibold text-ink-800">
+        {icon} {label}
+      </span>
+      <span className="text-[10.5px] leading-4 text-ink-500">{hint}</span>
+      <span className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-pine">
+        <Upload className="h-3.5 w-3.5" />
+        {file ? file.name : 'Choose file'}
+      </span>
+      <input
+        type="file"
+        accept={accept}
+        className="sr-only"
+        onChange={(event) => onChange(event.target.files?.[0] ?? null)}
+      />
+    </label>
+  );
+}
+
 function PhotosPanel({
   propertyId,
+  ownerId,
   photos,
   onChanged,
 }: {
   propertyId: string;
+  ownerId: string;
   photos: PropertyPhotoRow[];
   onChanged: () => void;
 }) {
@@ -266,8 +677,13 @@ function PhotosPanel({
   const [url, setUrl] = useState('');
   const [adding, setAdding] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadingVideo, setUploadingVideo] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLInputElement>(null);
+  const mediaQuery = useApiQuery(() => getPropertyMedia(propertyId), [propertyId]);
+  const videos = (mediaQuery.data ?? []).filter((item: PropertyVideoRow) => item.media_type === 'video');
 
   const sorted = [...photos].sort((a, b) => a.display_order - b.display_order);
 
@@ -297,13 +713,47 @@ function PhotosPanel({
   async function upload(file: File) {
     setUploading(true);
     try {
-      const path = await uploadPropertyPhoto(file, propertyId);
+      const path = await uploadPropertyPhoto(file, propertyId, ownerId);
       await addPath(path);
     } catch (error) {
       toastError('Upload failed', errorMessage(error));
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  async function uploadClip(file: File) {
+    setUploadingVideo(true);
+    try {
+      const duration = await readVideoDuration(file);
+      if (duration && duration > 61) {
+        throw new ApiError('VALIDATION_ERROR', 'Keep the walkthrough under 60 seconds.', 400);
+      }
+      const path = await uploadPropertyVideo(file, propertyId, ownerId);
+      await addPropertyVideo(propertyId, path, duration, videos.length);
+      success('Video added', 'Your walkthrough is now attached to this listing.');
+      mediaQuery.refresh();
+      onChanged();
+    } catch (error) {
+      toastError('Video not added', errorMessage(error));
+    } finally {
+      setUploadingVideo(false);
+      if (videoRef.current) videoRef.current.value = '';
+    }
+  }
+
+  async function removeVideo(mediaId: string) {
+    setDeletingVideoId(mediaId);
+    try {
+      await deletePropertyVideo(propertyId, mediaId);
+      success('Video removed');
+      mediaQuery.refresh();
+      onChanged();
+    } catch (error) {
+      toastError('Video not removed', errorMessage(error));
+    } finally {
+      setDeletingVideoId(null);
     }
   }
 
@@ -374,6 +824,81 @@ function PhotosPanel({
             ))}
           </div>
         )}
+
+        <div className="mt-6 border-t border-sand-200/70 pt-5">
+          <div className="flex items-center gap-2">
+            <span className="grid h-8 w-8 place-items-center rounded-xl bg-sage-100 text-pine">
+              <Video className="h-4 w-4" />
+            </span>
+            <div>
+              <h2 className="text-[18px] leading-tight">Walkthrough video</h2>
+              <p className="text-[11.5px] text-ink-500">
+                One short clip (max 60 seconds) showing the entrance, main rooms and workspace.
+              </p>
+            </div>
+          </div>
+
+          {videos.length > 0 ? (
+            <div className="mt-4 space-y-3">
+              {videos.map((clip) => (
+                <div key={clip.id} className="overflow-hidden rounded-2xl border border-sand-200 bg-black/90">
+                  {clip.url ? (
+                    <video
+                      src={clip.url}
+                      controls
+                      playsInline
+                      className="aspect-video w-full bg-black"
+                    />
+                  ) : (
+                    <div className="grid aspect-video place-items-center text-[11px] text-sand-200">
+                      Video unavailable
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-3 bg-white px-3 py-2">
+                    <p className="truncate text-[11px] text-ink-600">
+                      {clip.duration_seconds ? `${clip.duration_seconds}s walkthrough` : 'Walkthrough'}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void removeVideo(clip.id)}
+                      loading={deletingVideoId === clip.id}
+                      leading={<Trash2 className="h-3.5 w-3.5" />}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-2xl bg-sand-50 px-4 py-3 text-[11px] leading-5 text-ink-500">
+              No walkthrough yet. A short, honest clip helps guests trust the home before a swap.
+            </p>
+          )}
+
+          <label className="mt-3 inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-xl border border-sand-300 bg-white/70 px-3 text-[12px] font-medium text-ink-700 transition hover:border-moss/40 hover:text-pine">
+            {uploadingVideo ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Video className="h-3.5 w-3.5" />
+            )}
+            {uploadingVideo ? 'Uploading…' : videos.length > 0 ? 'Replace with new clip' : 'Upload video'}
+            <input
+              ref={videoRef}
+              type="file"
+              accept="video/mp4,video/quicktime,video/webm"
+              className="sr-only"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void uploadClip(file);
+              }}
+            />
+          </label>
+          <p className="mt-2 text-[10.5px] leading-5 text-ink-500">
+            MP4, MOV or WebM up to 100 MB. Videos are stored privately and streamed through signed URLs.
+          </p>
+        </div>
 
         <div className="mt-6 space-y-3 border-t border-sand-200/70 pt-5">
           <Input
